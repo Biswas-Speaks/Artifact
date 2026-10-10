@@ -1,0 +1,8 @@
+[
+  {
+    "AllowedOrigins": ["https://biswa.io"],
+    "AllowedMethods": ["PUT", "GET", "HEAD"],
+    "AllowedHeaders": ["*"],
+    "MaxAgeSeconds": 3600
+  }
+]

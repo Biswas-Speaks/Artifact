@@ -1,0 +1,17 @@
+# Cloudflare proxies traffic to this VM; the Origin Certificate secures Cloudflare -> VM.
+{
+	auto_https off
+}
+
+http://biswa.io, http://*.biswa.io {
+	redir https://{host}{uri} permanent
+}
+
+https://biswa.io, https://www.biswa.io, https://*.biswa.io {
+	tls /etc/ssl/cloudflare/origin.pem /etc/ssl/cloudflare/origin.key
+	encode gzip
+	request_body {
+		max_size 12MB
+	}
+	reverse_proxy 127.0.0.1:3000
+}

@@ -1,0 +1,6 @@
+/app.css
+  cache-control: public, max-age=86400
+/app.js
+  cache-control: public, max-age=86400
+/favicon.ico
+  cache-control: public, max-age=31536000, immutable

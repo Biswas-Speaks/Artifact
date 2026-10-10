@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+
+# Environment — NEVER commit real secrets
+.env
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS artefacts
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# Build artefacts
+ssr-server/
