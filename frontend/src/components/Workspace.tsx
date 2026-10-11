@@ -1,6 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { Link, useNavigate } from '@tanstack/react-router';
-import { Check, Copy, ExternalLink, FileText, Globe, Layers, Lock, Plus, Search, Trash2, Upload, X } from 'lucide-react';
+import {
+  AlertCircle, Check, CheckCircle2, Copy, ExternalLink, FileText,
+  Globe, Layers, Lock, Mail, Plus, RefreshCw, Search, Trash2,
+  Upload, X, AlertTriangle, Clock,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { useAuth } from '@/lib/auth';
@@ -14,10 +18,21 @@ interface ArtifactItem {
   name: string;
   type: string;
   subdomain: string | null;
-  status: 'published' | 'draft';
+  status: 'published' | 'draft' | 'suspended';
+  review_status: 'approved' | 'pending' | 'rejected';
   locked: boolean;
   updated_at: string;
+  published_at: string | null;
+  has_changes: boolean;
 }
+
+interface QuotaInfo {
+  published: number;
+  maxPublished: number;
+  total: number;
+  maxTotal: number;
+}
+
 interface FileItem  { id: string; name: string; size: number; created_at: string; link: string }
 interface ImageItem { id: string; name: string; url: string }
 
@@ -36,7 +51,6 @@ async function copyText(text: string): Promise<boolean> {
   if (navigator.clipboard) {
     try { await navigator.clipboard.writeText(text); return true; } catch { /* fall through */ }
   }
-  // Fallback: create a temporary textarea
   const el = document.createElement('textarea');
   el.value = text;
   el.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0';
@@ -45,6 +59,31 @@ async function copyText(text: string): Promise<boolean> {
   const ok = document.execCommand('copy');
   document.body.removeChild(el);
   return ok;
+}
+
+/* ── Subdomain availability hook ─────────────────────────────────────── */
+function useSubdomainCheck(name: string, excludeId?: string) {
+  const [state, setState] = useState<{ available?: boolean; reason?: string; checking: boolean }>({ checking: false });
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!name || name.length < 3) { setState({ checking: false }); return; }
+    setState({ checking: true });
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(async () => {
+      try {
+        const params = new URLSearchParams({ name });
+        if (excludeId) params.set('exclude', excludeId);
+        const res = await apiFetch<{ available: boolean; reason?: string }>(`/api/subdomain-check?${params}`);
+        setState({ available: res.available, reason: res.reason, checking: false });
+      } catch {
+        setState({ checking: false });
+      }
+    }, 400);
+    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+  }, [name, excludeId]);
+
+  return state;
 }
 
 /* ══════════════════════════════════════════════════════════════════════ */
@@ -58,6 +97,7 @@ export function Workspace({ view }: { view: WorkspaceView }) {
 
   // Artifact state
   const [artifacts, setArtifacts] = useState<ArtifactItem[]>([]);
+  const [quota, setQuota] = useState<QuotaInfo | null>(null);
   const [newDraft, setNewDraft] = useState(false);
   const [title, setTitle] = useState('');
 
@@ -69,6 +109,10 @@ export function Workspace({ view }: { view: WorkspaceView }) {
   const [publishError, setPublishError] = useState('');
   const [publishing, setPublishing] = useState(false);
 
+  // Resend verification
+  const [resending, setResending] = useState(false);
+  const [resendMsg, setResendMsg] = useState('');
+
   // File/image state
   const [files, setFiles] = useState<FileItem[]>([]);
   const [images, setImages] = useState<ImageItem[]>([]);
@@ -77,10 +121,26 @@ export function Workspace({ view }: { view: WorkspaceView }) {
   const assetView = view === 'files' || view === 'images';
   const heading = STUDIO_TABS.find(t => t.to === `/${view}`)?.heading ?? 'My artifacts';
 
+  // Subdomain availability check (live)
+  const subdomainCheck = useSubdomainCheck(subdomain, publishTarget?.id);
+
   // Auth guard
   useEffect(() => {
     if (!loading && !user) void navigate({ to: '/login' });
   }, [user, loading, navigate]);
+
+  // Handle ?verified= query param from email verification redirect
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const v = params.get('verified');
+    if (v === 'ok') setNotice('✓ Email verified! You can now publish artifacts.');
+    if (v === 'fail') setNotice('Verification link is invalid or expired. Please request a new one.');
+    if (v) {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('verified');
+      window.history.replaceState({}, '', url.pathname + url.search);
+    }
+  }, []);
 
   // Load data
   useEffect(() => {
@@ -90,7 +150,9 @@ export function Workspace({ view }: { view: WorkspaceView }) {
     } else if (view === 'images') {
       apiFetch<{ items: ImageItem[] }>('/api/images').then(d => setImages(d.items)).catch(() => setNotice('Failed to load images'));
     } else {
-      apiFetch<{ items: ArtifactItem[] }>('/api/artifacts').then(d => setArtifacts(d.items)).catch(() => setNotice('Failed to load artifacts'));
+      apiFetch<{ items: ArtifactItem[]; quota: QuotaInfo }>('/api/artifacts')
+        .then(d => { setArtifacts(d.items); setQuota(d.quota); })
+        .catch(() => setNotice('Failed to load artifacts'));
     }
   }, [view, user]);
 
@@ -131,16 +193,34 @@ export function Workspace({ view }: { view: WorkspaceView }) {
     if (!publishTarget) return;
     setPublishError('');
     setPublishing(true);
-    const res = await apiFetch<{ ok?: boolean; subdomain?: string; locked?: boolean; error?: string }>(
+    const res = await apiFetch<{
+      ok?: boolean; subdomain?: string; locked?: boolean;
+      pending?: boolean; error?: string; code?: string;
+    }>(
       `/api/artifacts/${publishTarget.id}/publish`,
       { method: 'POST', body: JSON.stringify({ subdomain, protect, password }) }
     );
     setPublishing(false);
-    if (res.error) { setPublishError(res.error); return; }
+    if (res.error) {
+      setPublishError(res.error);
+      return;
+    }
+    if (res.pending) {
+      setArtifacts(prev => prev.map(a => a.id === publishTarget.id
+        ? { ...a, subdomain: res.subdomain ?? subdomain, review_status: 'pending', has_changes: false }
+        : a
+      ));
+      setPublishTarget(null);
+      setNotice('Submitted for review. You\'ll be notified when it\'s approved.');
+      return;
+    }
     setArtifacts(prev => prev.map(a => a.id === publishTarget.id
-      ? { ...a, status: 'published', subdomain: res.subdomain ?? subdomain, locked: res.locked ?? protect }
+      ? { ...a, status: 'published', subdomain: res.subdomain ?? subdomain, locked: res.locked ?? protect, has_changes: false }
       : a
     ));
+    // Refresh quota
+    apiFetch<{ items: ArtifactItem[]; quota: QuotaInfo }>('/api/artifacts')
+      .then(d => setQuota(d.quota)).catch(() => {});
     setPublishTarget(null);
     setNotice(`Published at ${subdomain}.biswa.io${protect ? ' 🔒' : ''}`);
   };
@@ -148,7 +228,15 @@ export function Workspace({ view }: { view: WorkspaceView }) {
   const doUnpublish = async (id: string) => {
     await apiFetch(`/api/artifacts/${id}/unpublish`, { method: 'POST' });
     setArtifacts(prev => prev.map(a => a.id === id ? { ...a, status: 'draft', subdomain: null, locked: false } : a));
-    setNotice('Artifact unpublished.');
+    setNotice('Artifact unpublished. Subdomain is reserved.');
+  };
+
+  const resendVerification = async () => {
+    setResending(true);
+    const res = await apiFetch<{ ok?: boolean; error?: string }>('/api/auth/resend-verification', { method: 'POST' });
+    setResending(false);
+    setResendMsg(res.ok ? 'Verification email sent! Check your inbox.' : (res.error ?? 'Failed to send'));
+    setTimeout(() => setResendMsg(''), 5000);
   };
 
   /* ── Files ──────────────────────────────────────────────────────────── */
@@ -215,8 +303,31 @@ export function Workspace({ view }: { view: WorkspaceView }) {
     );
   }
 
+  const isAlreadyPublished = publishTarget?.status === 'published';
+
   return (
     <StudioShell view={view}>
+      {/* ── Email verification banner ────────────────────────────────── */}
+      {!user.email_verified && !assetView && (
+        <div className="mb-6 flex flex-wrap items-center gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm">
+          <Mail size={16} className="shrink-0 text-amber-500" />
+          <span className="flex-1 text-amber-700 dark:text-amber-300">
+            Please verify your email address to publish artifacts.
+          </span>
+          <Button
+            size="sm"
+            variant="outline"
+            className="border-amber-500/40 text-amber-700 hover:bg-amber-500/10 dark:text-amber-300"
+            disabled={resending}
+            onClick={() => void resendVerification()}
+          >
+            {resending ? <RefreshCw size={13} className="animate-spin" /> : <Mail size={13} />}
+            Resend verification
+          </Button>
+          {resendMsg && <span className="w-full text-xs text-amber-700 dark:text-amber-300">{resendMsg}</span>}
+        </div>
+      )}
+
       {/* Page header */}
       <div className="flex flex-wrap items-end justify-between gap-5">
         <div>
@@ -230,6 +341,26 @@ export function Workspace({ view }: { view: WorkspaceView }) {
           {assetView ? `Upload ${view === 'images' ? 'image' : 'file'}` : 'New artifact'}
         </Button>
       </div>
+
+      {/* Quota meter (artifact views only) */}
+      {!assetView && quota && (
+        <div className="mt-4 flex flex-wrap gap-6 text-xs text-muted-foreground">
+          <div className="flex items-center gap-2">
+            <Globe size={13} className="text-accent" />
+            <span>{quota.published} of {quota.maxPublished} published</span>
+            <div className="h-1.5 w-24 overflow-hidden rounded-full bg-secondary">
+              <div
+                className="h-full rounded-full bg-accent transition-all"
+                style={{ width: `${Math.min(100, (quota.published / quota.maxPublished) * 100)}%` }}
+              />
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Layers size={13} className="text-muted-foreground" />
+            <span>{quota.total} of {quota.maxTotal} artifacts</span>
+          </div>
+        </div>
+      )}
 
       {/* Search */}
       <label className="my-6 flex w-full items-center gap-2 rounded-md border border-input px-3 sm:w-64">
@@ -302,22 +433,50 @@ export function Workspace({ view }: { view: WorkspaceView }) {
                   style={{ background: 'linear-gradient(135deg, oklch(0.55 0.22 278), oklch(0.72 0.16 300))' }}>
                   {item.name.charAt(0).toUpperCase()}
                   {item.locked && <Lock size={14} className="absolute right-3 top-3 text-white/80" />}
+
+                  {/* Status overlay badges */}
+                  {item.status === 'suspended' && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-black/60">
+                      <span className="rounded-full bg-destructive px-3 py-1 text-sm font-semibold text-white">Suspended</span>
+                    </div>
+                  )}
+                  {item.review_status === 'pending' && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-black/60">
+                      <span className="flex items-center gap-1.5 rounded-full bg-amber-500 px-3 py-1 text-sm font-semibold text-black">
+                        <Clock size={12} /> Under review
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 {/* Title + status */}
                 <div className="mt-4 flex items-center justify-between gap-2">
                   <h2 className="truncate font-display text-lg font-semibold">{item.name}</h2>
-                  <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs ${
-                    item.status === 'published' ? 'bg-shape-mint/20 text-foreground' : 'bg-accent/15 text-accent'
-                  }`}>{item.status}</span>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    {/* Unpublished changes badge */}
+                    {item.has_changes && item.status === 'published' && (
+                      <span className="flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                        <AlertCircle size={9} /> Unpublished changes
+                      </span>
+                    )}
+                    <span className={`rounded-full px-2.5 py-0.5 text-xs ${
+                      item.status === 'published' ? 'bg-shape-mint/20 text-foreground' :
+                      item.status === 'suspended' ? 'bg-destructive/20 text-destructive' :
+                      'bg-accent/15 text-accent'
+                    }`}>{item.status}</span>
+                  </div>
                 </div>
 
                 {/* Subdomain */}
-                {item.subdomain ? (
-                  <a href={`http://${item.subdomain}.biswa.io`} target="_blank" rel="noreferrer"
+                {item.subdomain && item.status === 'published' ? (
+                  <a href={`https://${item.subdomain}.biswa.io`} target="_blank" rel="noreferrer"
                     className="mt-1 flex items-center gap-1 font-mono text-xs text-accent hover:underline">
                     <Globe size={11} />{item.subdomain}.biswa.io
                   </a>
+                ) : item.subdomain && item.review_status === 'pending' ? (
+                  <p className="mt-1 flex items-center gap-1 font-mono text-xs text-amber-500">
+                    <Clock size={10} />{item.subdomain}.biswa.io — pending review
+                  </p>
                 ) : (
                   <p className="mt-1 font-mono text-xs text-muted-foreground">not published</p>
                 )}
@@ -329,11 +488,25 @@ export function Workspace({ view }: { view: WorkspaceView }) {
                     Edit
                   </Button>
                   {item.status === 'published' ? (
-                    <Button variant="outline" size="sm" onClick={() => void doUnpublish(item.id)}>
-                      Unpublish
+                    <>
+                      {/* Publish update (only shown when there are changes) */}
+                      {item.has_changes && (
+                        <Button size="sm" onClick={() => openPublish(item)}
+                          className="bg-amber-500 text-black hover:bg-amber-400">
+                          <RefreshCw size={13} /> Publish update
+                        </Button>
+                      )}
+                      <Button variant="outline" size="sm" onClick={() => void doUnpublish(item.id)}>
+                        Unpublish
+                      </Button>
+                    </>
+                  ) : item.review_status === 'pending' ? (
+                    <Button size="sm" variant="outline" disabled>
+                      <Clock size={13} /> Under review
                     </Button>
                   ) : (
-                    <Button size="sm" onClick={() => openPublish(item)}>
+                    <Button size="sm" onClick={() => openPublish(item)}
+                      disabled={!user.email_verified}>
                       <Globe size={14} /> Publish
                     </Button>
                   )}
@@ -371,18 +544,24 @@ export function Workspace({ view }: { view: WorkspaceView }) {
         </DialogContent>
       </Dialog>
 
-      {/* ── Publish dialog ───────────────────────────────────────────── */}
+      {/* ── Publish / Publish update dialog ─────────────────────────── */}
       <Dialog open={!!publishTarget} onOpenChange={open => { if (!open) setPublishTarget(null); }}>
         <DialogContent className="max-w-md">
           <DialogTitle className="flex items-center gap-2">
-            <Globe size={18} className="text-accent" /> Publish artifact
+            {isAlreadyPublished
+              ? <><RefreshCw size={18} className="text-amber-500" /> Publish update</>
+              : <><Globe size={18} className="text-accent" /> Publish artifact</>
+            }
           </DialogTitle>
           <DialogDescription>
-            Choose a subdomain to publish <b>{publishTarget?.name}</b> publicly.
+            {isAlreadyPublished
+              ? <>Push your latest changes to <b>{publishTarget?.name}</b> live.</>
+              : <>Choose a subdomain to publish <b>{publishTarget?.name}</b> publicly.</>
+            }
           </DialogDescription>
 
           <div className="space-y-4 pt-2">
-            {/* Subdomain input */}
+            {/* Subdomain input + live availability check */}
             <div>
               <label className="text-sm font-medium">Subdomain</label>
               <div className="mt-1.5 flex items-center rounded-lg border border-input bg-background overflow-hidden focus-within:border-accent focus-within:ring-2 focus-within:ring-accent/30">
@@ -397,6 +576,20 @@ export function Workspace({ view }: { view: WorkspaceView }) {
                   .biswa.io
                 </span>
               </div>
+              {/* Availability indicator */}
+              {subdomain.length >= 3 && (
+                <p className={`mt-1 flex items-center gap-1 text-xs ${
+                  subdomainCheck.checking ? 'text-muted-foreground' :
+                  subdomainCheck.available ? 'text-green-600 dark:text-green-400' : 'text-destructive'
+                }`}>
+                  {subdomainCheck.checking
+                    ? <><RefreshCw size={10} className="animate-spin" /> Checking…</>
+                    : subdomainCheck.available
+                    ? <><CheckCircle2 size={10} /> Available</>
+                    : <><AlertCircle size={10} /> {subdomainCheck.reason ?? 'Not available'}</>
+                  }
+                </p>
+              )}
               <p className="mt-1 text-xs text-muted-foreground">Letters, numbers and hyphens only.</p>
             </div>
 
@@ -445,8 +638,17 @@ export function Workspace({ view }: { view: WorkspaceView }) {
               <Button variant="outline" className="flex-1" onClick={() => setPublishTarget(null)}>
                 <X size={14} /> Cancel
               </Button>
-              <Button className="flex-1" disabled={publishing || !subdomain} onClick={() => void doPublish()}>
-                {publishing ? 'Publishing…' : <><Globe size={14} /> Publish</>}
+              <Button
+                className={`flex-1 ${isAlreadyPublished ? 'bg-amber-500 text-black hover:bg-amber-400' : ''}`}
+                disabled={publishing || !subdomain || (!subdomainCheck.available && !subdomainCheck.checking && subdomain.length >= 3 && publishTarget?.subdomain !== subdomain)}
+                onClick={() => void doPublish()}
+              >
+                {publishing
+                  ? 'Publishing…'
+                  : isAlreadyPublished
+                  ? <><RefreshCw size={14} /> Publish update</>
+                  : <><Globe size={14} /> Publish</>
+                }
               </Button>
             </div>
           </div>

@@ -1,7 +1,6 @@
 /**
  * src/lib/auth.tsx
  * Real authentication context — talks to the Express /api/* backend.
- * Replaces DemoStudio for auth concerns.
  */
 import { createContext, useContext, useEffect, useState, useCallback, type ReactNode } from 'react';
 
@@ -12,6 +11,10 @@ export interface User {
   full_name: string;
   role: 'admin' | 'user';
   must_change_password: boolean;
+  email_verified: boolean;
+  trusted: boolean;
+  banned: boolean;
+  is_admin: boolean;
 }
 
 interface AuthState {

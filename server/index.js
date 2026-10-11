@@ -42,17 +42,27 @@ async function seedAdmin() {
     return;
   }
 
+  // Ensure the hardcoded bootstrap admin exists
   const { rows } = await db.q(`SELECT id FROM users WHERE username = 'biswas'`);
-  if (rows.length > 0) return;
+  if (rows.length === 0) {
+    const hash = await bcrypt.hash('Biswas@2026', 10);
+    await db.q(
+      `INSERT INTO users (username, email, password_hash, full_name, role, active, must_change_password, email_verified, trusted, is_admin)
+       VALUES ($1, $2, $3, $4, 'admin', TRUE, FALSE, TRUE, TRUE, TRUE)`,
+      ['biswas', 'Biswajitshial@outlook.com', hash, 'Biswas']
+    );
+    console.log('[startup] Admin account created — username: biswas');
+  }
 
-  const hash = await bcrypt.hash('Biswas@2026', 10);
-  await db.q(
-    `INSERT INTO users (username, email, password_hash, full_name, role, active, must_change_password)
-     VALUES ($1, $2, $3, $4, 'admin', TRUE, FALSE)`,
-    ['biswas', 'Biswajitshial@outlook.com', hash, 'Biswas']
-  );
-
-  console.log('[startup] Admin account created — username: biswas');
+  // Promote by ADMIN_EMAIL: if someone with ADMIN_EMAIL exists, ensure they are admin
+  if (C.ADMIN_EMAIL) {
+    await db.q(`
+      UPDATE users
+      SET    role = 'admin', is_admin = TRUE, trusted = TRUE, email_verified = TRUE
+      WHERE  LOWER(email) = $1
+        AND  (role != 'admin' OR is_admin = FALSE)
+    `, [C.ADMIN_EMAIL]);
+  }
 }
 
 // ── Start HTTP server immediately ──────────────────────────────────────────
