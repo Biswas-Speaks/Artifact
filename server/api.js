@@ -30,8 +30,14 @@ const {
 } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 
-const { q }   = require('./db');
-const C       = require('./config');
+const { q, isReady } = require('./db');
+const C              = require('./config');
+
+/** Middleware: reject requests that need the DB when it isn't ready yet. */
+const requireDB = (_req, res, next) => {
+  if (isReady()) return next();
+  res.status(503).json({ error: 'Database not ready yet. Please try again shortly.' });
+};
 const mail    = require('./mail');
 const TPL     = require('./templates');
 
@@ -99,7 +105,7 @@ const setSessionCookie = (res, userId) =>
   res.cookie(
     'sid',
     jwt.sign({ uid: userId }, C.SECRET, { expiresIn: '7d' }),
-    { httpOnly: true, sameSite: 'lax', secure: C.PROD, maxAge: 7 * 864e5 }
+    { httpOnly: true, sameSite: 'lax', secure: C.COOKIE_SECURE, maxAge: 7 * 864e5 }
   );
 
 // ══════════════════════════════════════════════════════════════════
@@ -113,6 +119,8 @@ router.get('/config', (_req, res) =>
 
 /** Return the currently signed-in user, or null. */
 router.get('/me', wrap(async (req, res) => {
+  // If DB isn't ready, just say not signed in — homepage still loads fine
+  if (!isReady()) return res.json({ user: null });
   try {
     const uid = jwt.verify(req.cookies.sid, C.SECRET).uid;
     const { rows } = await q(
@@ -132,7 +140,7 @@ router.post('/auth/signup', (_req, res) =>
   badRequest(res, 'Sign-ups are closed. Contact your admin.', 403)
 );
 
-router.post('/auth/login', authLimiter, wrap(async (req, res) => {
+router.post('/auth/login', requireDB, authLimiter, wrap(async (req, res) => {
   const { username = '', password = '' } = req.body || {};
 
   const { rows } = await q(
@@ -222,7 +230,7 @@ router.post('/auth/reset', authLimiter, wrap(async (req, res) => {
 /** Columns returned for list views (no page content). */
 const ARTIFACT_COLS = 'id, name, type, subdomain, status, (pw_hash IS NOT NULL) AS locked, updated_at';
 
-router.get('/artifacts', requireAuth, wrap(async (req, res) => {
+router.get('/artifacts', requireDB, requireAuth, wrap(async (req, res) => {
   const { rows } = await q(
     `SELECT ${ARTIFACT_COLS} FROM artifacts WHERE user_id = $1 ORDER BY updated_at DESC`,
     [req.uid]
@@ -230,7 +238,7 @@ router.get('/artifacts', requireAuth, wrap(async (req, res) => {
   res.json({ items: rows });
 }));
 
-router.post('/artifacts', requireAuth, wrap(async (req, res) => {
+router.post('/artifacts', requireDB, requireAuth, wrap(async (req, res) => {
   const { name = 'Untitled', type = 'web' } = req.body || {};
 
   if (!TPL[type]) return badRequest(res, 'Unknown artifact type');
@@ -244,7 +252,7 @@ router.post('/artifacts', requireAuth, wrap(async (req, res) => {
   res.json({ id: rows[0].id });
 }));
 
-router.get('/artifacts/:id', requireAuth, requireUUID, wrap(async (req, res) => {
+router.get('/artifacts/:id', requireDB, requireAuth, requireUUID, wrap(async (req, res) => {
   const { rows } = await q(
     `SELECT ${ARTIFACT_COLS}, pages, css, js FROM artifacts WHERE id = $1 AND user_id = $2`,
     [req.params.id, req.uid]
@@ -252,7 +260,7 @@ router.get('/artifacts/:id', requireAuth, requireUUID, wrap(async (req, res) => 
   rows[0] ? res.json(rows[0]) : badRequest(res, 'Artifact not found', 404);
 }));
 
-router.put('/artifacts/:id', requireAuth, requireUUID, wrap(async (req, res) => {
+router.put('/artifacts/:id', requireDB, requireAuth, requireUUID, wrap(async (req, res) => {
   const { name, pages, css = '', js = '' } = req.body || {};
 
   const isValidPages =
@@ -272,7 +280,7 @@ router.put('/artifacts/:id', requireAuth, requireUUID, wrap(async (req, res) => 
   rowCount ? res.json({ ok: true }) : badRequest(res, 'Artifact not found', 404);
 }));
 
-router.post('/artifacts/:id/publish', requireAuth, requireUUID, wrap(async (req, res) => {
+router.post('/artifacts/:id/publish', requireDB, requireAuth, requireUUID, wrap(async (req, res) => {
   const { subdomain = '', protect = false, password = '' } = req.body || {};
   const sub = String(subdomain).toLowerCase().trim();
 
@@ -311,7 +319,7 @@ router.post('/artifacts/:id/publish', requireAuth, requireUUID, wrap(async (req,
   res.json({ ok: true, subdomain: sub, locked: !!pwHash });
 }));
 
-router.post('/artifacts/:id/unpublish', requireAuth, requireUUID, wrap(async (req, res) => {
+router.post('/artifacts/:id/unpublish', requireDB, requireAuth, requireUUID, wrap(async (req, res) => {
   await q(
     `UPDATE artifacts SET status = 'draft' WHERE id = $1 AND user_id = $2`,
     [req.params.id, req.uid]
@@ -319,7 +327,7 @@ router.post('/artifacts/:id/unpublish', requireAuth, requireUUID, wrap(async (re
   res.json({ ok: true });
 }));
 
-router.delete('/artifacts/:id', requireAuth, requireUUID, wrap(async (req, res) => {
+router.delete('/artifacts/:id', requireDB, requireAuth, requireUUID, wrap(async (req, res) => {
   await q('DELETE FROM artifacts WHERE id = $1 AND user_id = $2', [req.params.id, req.uid]);
   res.json({ ok: true });
 }));
@@ -349,7 +357,7 @@ const filePublicUrl = (key) =>
     ? `${C.E.R2_PUBLIC_URL.replace(/\/$/, '')}/${key.split('/').map(encodeURIComponent).join('/')}`
     : getSignedUrl(s3, new GetObjectCommand({ Bucket: C.E.R2_BUCKET, Key: key }), { expiresIn: 7 * 86_400 });
 
-router.post('/files/presign', requireAuth, wrap(async (req, res) => {
+router.post('/files/presign', requireDB, requireAuth, wrap(async (req, res) => {
   const name  = sanitiseFileName(req.body.name);
   const size  = Number(req.body.size) || 0;
   const mime  = String(req.body.type || 'application/octet-stream').slice(0, 100);
@@ -373,7 +381,7 @@ router.post('/files/presign', requireAuth, wrap(async (req, res) => {
   res.json({ id: rows[0].id, url: uploadUrl, type: mime });
 }));
 
-router.get('/files', requireAuth, wrap(async (req, res) => {
+router.get('/files', requireDB, requireAuth, wrap(async (req, res) => {
   const { rows } = await q(
     'SELECT id, key, name, size, created_at FROM files WHERE user_id = $1 ORDER BY created_at DESC',
     [req.uid]
@@ -392,7 +400,7 @@ router.get('/files', requireAuth, wrap(async (req, res) => {
   res.json({ items });
 }));
 
-router.delete('/files/:id', requireAuth, requireUUID, wrap(async (req, res) => {
+router.delete('/files/:id', requireDB, requireAuth, requireUUID, wrap(async (req, res) => {
   const { rows } = await q(
     'DELETE FROM files WHERE id = $1 AND user_id = $2 RETURNING key',
     [req.params.id, req.uid]
@@ -435,7 +443,7 @@ const toSlug = (s) =>
     .replace(/^-+|-+$/g, '')
     .slice(0, 60);
 
-router.get('/images', requireAuth, wrap(async (req, res) => {
+router.get('/images', requireDB, requireAuth, wrap(async (req, res) => {
   const { rows } = await q(
     'SELECT id, name, url FROM images WHERE user_id = $1 ORDER BY created_at DESC',
     [req.uid]
@@ -443,7 +451,7 @@ router.get('/images', requireAuth, wrap(async (req, res) => {
   res.json({ items: rows });
 }));
 
-router.post('/images', requireAuth, imageUpload.single('file'), wrap(async (req, res) => {
+router.post('/images', requireDB, requireAuth, imageUpload.single('file'), wrap(async (req, res) => {
   if (!req.file) return badRequest(res, 'No image received');
 
   const baseName = toSlug(req.file.originalname.replace(/\.[^.]+$/, '')) || 'image';
@@ -465,7 +473,7 @@ router.post('/images', requireAuth, imageUpload.single('file'), wrap(async (req,
   res.json(rows[0]);
 }));
 
-router.put('/images/:id', requireAuth, requireUUID, wrap(async (req, res) => {
+router.put('/images/:id', requireDB, requireAuth, requireUUID, wrap(async (req, res) => {
   const name = toSlug((req.body || {}).name);
   if (!name) return badRequest(res, 'Name is required');
 
@@ -494,7 +502,7 @@ router.put('/images/:id', requireAuth, requireUUID, wrap(async (req, res) => {
   res.json(rows[0]);
 }));
 
-router.delete('/images/:id', requireAuth, requireUUID, wrap(async (req, res) => {
+router.delete('/images/:id', requireDB, requireAuth, requireUUID, wrap(async (req, res) => {
   const { rows } = await q(
     'DELETE FROM images WHERE id = $1 AND user_id = $2 RETURNING public_id',
     [req.params.id, req.uid]
@@ -513,7 +521,7 @@ router.delete('/images/:id', requireAuth, requireUUID, wrap(async (req, res) => 
 //  USER SETTINGS
 // ══════════════════════════════════════════════════════════════════
 
-router.get('/settings', requireAuth, wrap(async (req, res) => {
+router.get('/settings', requireDB, requireAuth, wrap(async (req, res) => {
   const { rows } = await q(
     'SELECT id, username, email, full_name, role, must_change_password FROM users WHERE id = $1',
     [req.uid]
@@ -521,7 +529,7 @@ router.get('/settings', requireAuth, wrap(async (req, res) => {
   rows[0] ? res.json(rows[0]) : badRequest(res, 'User not found', 404);
 }));
 
-router.put('/settings/profile', requireAuth, wrap(async (req, res) => {
+router.put('/settings/profile', requireDB, requireAuth, wrap(async (req, res) => {
   const { full_name = '', email = '' } = req.body || {};
 
   if (!/^\S+@\S+\.\S+$/.test(email)) return badRequest(res, 'Enter a valid email address');
@@ -538,7 +546,7 @@ router.put('/settings/profile', requireAuth, wrap(async (req, res) => {
   }
 }));
 
-router.put('/settings/password', requireAuth, wrap(async (req, res) => {
+router.put('/settings/password', requireDB, requireAuth, wrap(async (req, res) => {
   const { current_password = '', new_password = '' } = req.body || {};
 
   if (String(new_password).length < 8) {
@@ -570,14 +578,14 @@ router.put('/settings/password', requireAuth, wrap(async (req, res) => {
 //  ADMIN — user management
 // ══════════════════════════════════════════════════════════════════
 
-router.get('/admin/users', requireAuth, requireAdmin, wrap(async (req, res) => {
+router.get('/admin/users', requireDB, requireAuth, requireAdmin, wrap(async (req, res) => {
   const { rows } = await q(
     'SELECT id, username, email, full_name, role, active, created_at FROM users ORDER BY created_at ASC'
   );
   res.json({ users: rows });
 }));
 
-router.post('/admin/users', requireAuth, requireAdmin, wrap(async (req, res) => {
+router.post('/admin/users', requireDB, requireAuth, requireAdmin, wrap(async (req, res) => {
   const { username = '', email = '', full_name = '', role = 'user' } = req.body || {};
 
   if (!/^[a-zA-Z0-9_.-]{3,30}$/.test(username)) {
@@ -626,7 +634,7 @@ router.post('/admin/users', requireAuth, requireAdmin, wrap(async (req, res) => 
   res.json(newUser);
 }));
 
-router.patch('/admin/users/:id/active', requireAuth, requireUUID, requireAdmin, wrap(async (req, res) => {
+router.patch('/admin/users/:id/active', requireDB, requireAuth, requireUUID, requireAdmin, wrap(async (req, res) => {
   if (req.params.id === req.uid) {
     return badRequest(res, 'You cannot deactivate your own account');
   }
@@ -640,7 +648,7 @@ router.patch('/admin/users/:id/active', requireAuth, requireUUID, requireAdmin, 
   rows[0] ? res.json(rows[0]) : badRequest(res, 'User not found', 404);
 }));
 
-router.delete('/admin/users/:id', requireAuth, requireUUID, requireAdmin, wrap(async (req, res) => {
+router.delete('/admin/users/:id', requireDB, requireAuth, requireUUID, requireAdmin, wrap(async (req, res) => {
   if (req.params.id === req.uid) {
     return badRequest(res, 'You cannot delete your own account');
   }

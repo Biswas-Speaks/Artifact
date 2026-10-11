@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6d5df6"/>
+      <stop offset="100%" stop-color="#e84fb0"/>
+    </linearGradient>
+  </defs>
+  <!-- Rounded square background -->
+  <rect width="64" height="64" rx="16" fill="url(#g)"/>
+  <!-- ✦ four-pointed star -->
+  <path d="M32 10 L34.8 29.2 L54 32 L34.8 34.8 L32 54 L29.2 34.8 L10 32 L29.2 29.2 Z" fill="white"/>
+</svg>

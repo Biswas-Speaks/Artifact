@@ -1,20 +1,23 @@
 # Dependencies
 node_modules/
+frontend/node_modules/
 
 # Environment — NEVER commit real secrets
 .env
+
+# Build artifacts (built inside Docker)
+public/dist/
+ssr-server/
 
 # Logs
 *.log
 npm-debug.log*
 
-# OS artefacts
+# OS artifacts
 .DS_Store
 Thumbs.db
 
 # Editor
 .vscode/
 .idea/
-
-# Build artefacts
-ssr-server/
+*.tsbuildinfo

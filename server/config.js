@@ -41,6 +41,15 @@ module.exports = {
   /** True when NODE_ENV === "production". */
   PROD: E.NODE_ENV === 'production',
 
+  /**
+   * Whether to set Secure flag on cookies.
+   * Defaults to true in production, false in dev.
+   * Override with COOKIE_SECURE=false to allow HTTP (e.g. localhost access).
+   */
+  COOKIE_SECURE: E.COOKIE_SECURE !== undefined
+    ? E.COOKIE_SECURE !== 'false'
+    : E.NODE_ENV === 'production',
+
   /** Reserved subdomains list. */
   RESERVED,
 };

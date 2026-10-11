@@ -32,7 +32,7 @@ async function serve(req, res) {
     if (!ok && req.method === 'POST' && req.path === '/__unlock') {
       if (tooMany((req.headers['cf-connecting-ip'] || req.ip) + sub)) return res.status(429).send(gate(a.name, 'Too many attempts. Try later.'));
       if (await bcrypt.compare(String((req.body || {}).password || ''), a.pw_hash)) {
-        res.cookie('ap', jwt.sign({ aid: a.id }, C.SECRET, { expiresIn: '12h' }), { httpOnly: true, sameSite: 'lax', secure: C.PROD, maxAge: 12 * 3600e3 });
+        res.cookie('ap', jwt.sign({ aid: a.id }, C.SECRET, { expiresIn: '12h' }), { httpOnly: true, sameSite: 'lax', secure: C.COOKIE_SECURE, maxAge: 12 * 3600e3 });
         return res.redirect('/');
       }
       return res.status(401).send(gate(a.name, 'Wrong password'));

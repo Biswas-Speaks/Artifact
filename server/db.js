@@ -147,4 +147,13 @@ async function init() {
   console.log('[db] Tables ready');
 }
 
-module.exports = { q, init };
+// ── Readiness flag ─────────────────────────────────────────────────────────
+let _ready = false;
+
+/** Returns true once the DB has been initialised successfully. */
+const isReady = () => _ready;
+
+/** Called by server/index.js after init() + seedAdmin() succeed. */
+const setReady = (v) => { _ready = v; };
+
+module.exports = { q, init, isReady, setReady };
