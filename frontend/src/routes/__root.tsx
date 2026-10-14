@@ -2,6 +2,7 @@ import {
   createRootRouteWithContext,
   Outlet,
   Link,
+  useRouterState,
   type ErrorComponentProps,
 } from "@tanstack/react-router";
 import { QueryClient } from "@tanstack/react-query";
@@ -62,13 +63,17 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 });
 
 function RootComponent() {
+  const pathname = useRouterState({ select: s => s.location.pathname });
+  // Editor is a full-screen app — no chrome around it
+  const isEditor = pathname.startsWith("/editor/");
+
   return (
     <AuthProvider>
-      <Nav />
+      {!isEditor && <Nav />}
       <main>
         <Outlet />
       </main>
-      <Footer />
+      {!isEditor && <Footer />}
     </AuthProvider>
   );
 }

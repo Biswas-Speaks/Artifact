@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AboutRouteImport } from './routes/about'
 import { Route as AdminRouteImport } from './routes/admin'
+import { Route as AiRouteImport } from './routes/ai'
 import { Route as ArtifactsRouteImport } from './routes/artifacts'
 import { Route as DraftsRouteImport } from './routes/drafts'
 import { Route as ExploreRouteImport } from './routes/explore'
@@ -38,6 +39,11 @@ const AboutRoute = AboutRouteImport.update({
 const AdminRoute = AdminRouteImport.update({
   id: '/admin',
   path: '/admin',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AiRoute = AiRouteImport.update({
+  id: '/ai',
+  path: '/ai',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ArtifactsRoute = ArtifactsRouteImport.update({
@@ -105,6 +111,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
   '/admin': typeof AdminRoute
+  '/ai': typeof AiRoute
   '/artifacts': typeof ArtifactsRoute
   '/drafts': typeof DraftsRoute
   '/explore': typeof ExploreRoute
@@ -122,6 +129,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
   '/admin': typeof AdminRoute
+  '/ai': typeof AiRoute
   '/artifacts': typeof ArtifactsRoute
   '/drafts': typeof DraftsRoute
   '/explore': typeof ExploreRoute
@@ -140,6 +148,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
   '/admin': typeof AdminRoute
+  '/ai': typeof AiRoute
   '/artifacts': typeof ArtifactsRoute
   '/drafts': typeof DraftsRoute
   '/explore': typeof ExploreRoute
@@ -159,6 +168,7 @@ export interface FileRouteTypes {
     | '/'
     | '/about'
     | '/admin'
+    | '/ai'
     | '/artifacts'
     | '/drafts'
     | '/explore'
@@ -176,6 +186,7 @@ export interface FileRouteTypes {
     | '/'
     | '/about'
     | '/admin'
+    | '/ai'
     | '/artifacts'
     | '/drafts'
     | '/explore'
@@ -193,6 +204,7 @@ export interface FileRouteTypes {
     | '/'
     | '/about'
     | '/admin'
+    | '/ai'
     | '/artifacts'
     | '/drafts'
     | '/explore'
@@ -211,6 +223,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AboutRoute: typeof AboutRoute
   AdminRoute: typeof AdminRoute
+  AiRoute: typeof AiRoute
   ArtifactsRoute: typeof ArtifactsRoute
   DraftsRoute: typeof DraftsRoute
   ExploreRoute: typeof ExploreRoute
@@ -246,6 +259,13 @@ declare module '@tanstack/react-router' {
       path: '/admin'
       fullPath: '/admin'
       preLoaderRoute: typeof AdminRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/ai': {
+      id: '/ai'
+      path: '/ai'
+      fullPath: '/ai'
+      preLoaderRoute: typeof AiRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/artifacts': {
@@ -339,6 +359,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AboutRoute: AboutRoute,
   AdminRoute: AdminRoute,
+  AiRoute: AiRoute,
   ArtifactsRoute: ArtifactsRoute,
   DraftsRoute: DraftsRoute,
   ExploreRoute: ExploreRoute,

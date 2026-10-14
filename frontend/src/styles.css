@@ -365,3 +365,9 @@
     scroll-behavior: auto;
   }
 }
+
+/* ── Shimmer sweep for skeleton loaders and card hover effects ─── */
+@keyframes shimmer {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}

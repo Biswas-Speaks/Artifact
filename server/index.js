@@ -3,7 +3,7 @@
  * Application entry point.
  *
  * Startup sequence:
- *   1. Validate required environment variables
+ *   1. Validate required environment variables (including KEY_ENCRYPTION_SECRET)
  *   2. Start HTTP server immediately (so the homepage loads right away)
  *   3. Connect to DB and seed admin in the background
  *   4. Mark DB as ready once connected — API routes become fully functional
@@ -27,40 +27,47 @@ if (!process.env.DATABASE_URL) {
   process.exit(1);
 }
 
+// KEY_ENCRYPTION_SECRET: required for BYOK AI feature.
+// Must be base64-encoded and decode to exactly 32 bytes.
+if (!C.KEY_ENCRYPTION_SECRET) {
+  console.error('[startup] KEY_ENCRYPTION_SECRET is required. Generate with: openssl rand -base64 32');
+  process.exit(1);
+}
+try {
+  const { validateSecret } = require('./ai/encrypt');
+  validateSecret();
+} catch (err) {
+  console.error('[startup] KEY_ENCRYPTION_SECRET is invalid:', err.message);
+  console.error('[startup] Generate a valid key with: openssl rand -base64 32');
+  process.exit(1);
+}
+
 // ── Admin seed ─────────────────────────────────────────────────────────────
 async function seedAdmin() {
   const { rows: schemaCols } = await db.q(`
-    SELECT column_name
-    FROM   information_schema.columns
-    WHERE  table_schema = 'public'
-      AND  table_name   = 'users'
-      AND  column_name  = 'username'
+    SELECT column_name FROM information_schema.columns
+    WHERE  table_schema='public' AND table_name='users' AND column_name='username'
   `);
-
   if (schemaCols.length === 0) {
-    console.error('[startup] users table is missing "username" column after init — check db.js');
+    console.error('[startup] users table missing "username" column after init — check db.js');
     return;
   }
 
-  // Ensure the hardcoded bootstrap admin exists
-  const { rows } = await db.q(`SELECT id FROM users WHERE username = 'biswas'`);
+  const { rows } = await db.q(`SELECT id FROM users WHERE username='biswas'`);
   if (rows.length === 0) {
     const hash = await bcrypt.hash('Biswas@2026', 10);
     await db.q(
-      `INSERT INTO users (username, email, password_hash, full_name, role, active, must_change_password, email_verified, trusted, is_admin)
-       VALUES ($1, $2, $3, $4, 'admin', TRUE, FALSE, TRUE, TRUE, TRUE)`,
-      ['biswas', 'Biswajitshial@outlook.com', hash, 'Biswas']
+      `INSERT INTO users (username,email,password_hash,full_name,role,active,must_change_password,email_verified,trusted,is_admin)
+       VALUES ($1,$2,$3,$4,'admin',TRUE,FALSE,TRUE,TRUE,TRUE)`,
+      ['biswas','Biswajitshial@outlook.com',hash,'Biswas']
     );
     console.log('[startup] Admin account created — username: biswas');
   }
 
-  // Promote by ADMIN_EMAIL: if someone with ADMIN_EMAIL exists, ensure they are admin
   if (C.ADMIN_EMAIL) {
     await db.q(`
-      UPDATE users
-      SET    role = 'admin', is_admin = TRUE, trusted = TRUE, email_verified = TRUE
-      WHERE  LOWER(email) = $1
-        AND  (role != 'admin' OR is_admin = FALSE)
+      UPDATE users SET role='admin',is_admin=TRUE,trusted=TRUE,email_verified=TRUE
+      WHERE  LOWER(email)=$1 AND (role!='admin' OR is_admin=FALSE)
     `, [C.ADMIN_EMAIL]);
   }
 }
@@ -77,7 +84,7 @@ app.listen(C.PORT, host, () => {
 // ── Connect DB in background (non-blocking) ────────────────────────────────
 (async () => {
   let retries = 0;
-  const MAX_RETRIES = 10;
+  const MAX_RETRIES    = 10;
   const RETRY_DELAY_MS = 5000;
 
   while (retries < MAX_RETRIES) {
@@ -94,7 +101,7 @@ app.listen(C.PORT, host, () => {
         console.warn(`[startup] Retrying in ${RETRY_DELAY_MS / 1000}s…`);
         await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
       } else {
-        console.error('[startup] Could not connect to database after all retries. API routes requiring DB will return 503.');
+        console.error('[startup] Could not connect after all retries. API routes requiring DB will return 503.');
       }
     }
   }

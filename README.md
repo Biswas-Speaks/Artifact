@@ -12,12 +12,6 @@ cp .env.example .env   # fill in your secrets
 npm start
 ```
 
-Or with Docker:
-
-```bash
-docker compose up -d
-```
-
 ## Environment Variables
 
 Copy `.env.example` to `.env` and fill in every value before starting.
@@ -41,128 +35,137 @@ Copy `.env.example` to `.env` and fill in every value before starting.
 | `CLOUDINARY_API_KEY` | Cloudinary API key |
 | `CLOUDINARY_API_SECRET` | Cloudinary API secret |
 
-### New in this version
+### BYOK AI Code Generator (required)
 
 | Variable | Default | Description |
 |---|---|---|
-| `ADMIN_EMAIL` | — | Email that is auto-promoted to admin on login |
-| `APPROVAL_MODE` | `auto` | `auto` or `manual` — see First-publish approval below |
-| `TURNSTILE_SITE_KEY` | — | Cloudflare Turnstile public key (report form) |
-| `TURNSTILE_SECRET` | — | Cloudflare Turnstile secret key (server-side only) |
-| `IP_SALT` | falls back to `JWT_SECRET` | HMAC salt for hashing reporter IPs |
+| `KEY_ENCRYPTION_SECRET` | — | **Required.** AES-256-GCM master key. Generate: `openssl rand -base64 32` |
+| `AI_RATE_WINDOW_MIN` | `10` | Rolling window in minutes for AI rate limit |
+| `AI_RATE_LIMIT` | `15` | Max AI generation requests per user per window |
+| `AI_RATE_LIMIT_DAY` | `150` | Max AI generation requests per user per day |
+
+> **⚠ Warning:** If you lose or rotate `KEY_ENCRYPTION_SECRET`, all stored user AI keys become permanently unreadable. Users will need to re-enter their own API keys. Keep a secure backup.
+
+### Quotas
+
+| Variable | Default | Description |
+|---|---|---|
 | `MAX_PUBLISHED_PER_USER` | `3` | Published artifact quota per user |
 | `MAX_ARTIFACTS_PER_USER` | `20` | Total artifact quota per user |
 | `MAX_ARTIFACT_BYTES` | `512000` | Max size of one artifact (bytes) |
-| `MAX_STORAGE_PER_USER_MB` | `100` | R2 storage quota per user (MB) |
-| `MAX_IMAGES_PER_USER` | `50` | Cloudinary image quota per user |
+| `MAX_IMAGE_STORAGE_MB` | `10` | Total Cloudinary image storage per user (MB) |
+| `MAX_FILE_STORAGE_MB` | `20` | Total Cloudflare R2 file storage per user (MB) |
+| `MAX_IMAGES_PER_USER` | `50` | Cloudinary image count limit per user |
 | `MAX_IMAGE_BYTES` | `10485760` | Max single image upload size (bytes) |
+
+### Optional
+
+| Variable | Default | Description |
+|---|---|---|
+| `ADMIN_EMAIL` | — | Email auto-promoted to admin on login |
+| `APPROVAL_MODE` | `auto` | `auto` or `manual` — see First-publish approval |
+| `TURNSTILE_SITE_KEY` | — | Cloudflare Turnstile public key |
+| `TURNSTILE_SECRET` | — | Cloudflare Turnstile secret key |
+| `IP_SALT` | falls back to `JWT_SECRET` | HMAC salt for hashing reporter IPs |
 
 ## Features
 
 | Feature | Details |
 |---|---|
-| **Auth** | Public signup with email verification; login, logout, password reset via Gmail |
-| **Artifact Studio** | HTML/CSS/JS editor, live preview, multipage |
-| **Draft / Live copy** | Autosave only touches the draft; "Publish update" pushes draft → live |
-| **Version history** | Last 5 live snapshots; restore any version into the draft |
-| **Publishing** | One-click subdomain publishing (`name.biswa.io`), optional password protection |
-| **File Storage** | Cloudflare R2 — drag-and-drop, presigned uploads, shareable links |
-| **Image CDN** | Cloudinary — upload, rename, copy optimised URL |
-| **Abuse reports** | Unobtrusive "Report this page" link on every published artifact; Turnstile protection |
-| **Admin panel** | Pending approvals, Reports, All Artifacts, Users tabs |
-| **Quotas** | All configurable via `.env`; shown as a usage meter in Studio |
-| **Security headers** | `X-Content-Type-Options`, `Referrer-Policy`, `CSP` on all responses |
+| **Auth** | Email verification, login, password reset via Gmail |
+| **Artifact Studio** | HTML/CSS/JS editor with CodeMirror, live preview, multipage |
+| **Draft / Live copy** | Autosave only touches the draft; "Publish update" pushes to live |
+| **Version history** | Up to 30 snapshots with source badges (Manual / AI / Rollback) |
+| **Publishing** | One-click subdomain publishing (`name.biswa.io`), optional password |
+| **File Storage** | Cloudflare R2 — presigned uploads, two-phase confirm (HeadObject), quota |
+| **Image CDN** | Cloudinary — with per-user byte quota enforcement |
+| **Usage meters** | Real-time quota bars in the Studio sidebar |
+| **Social links** | YouTube + Instagram in Nav and Footer |
+| **BYOK AI** | Google Gemini & OpenAI code generation; keys encrypted AES-256-GCM |
+| **AI chat panel** | Collapsible drawer in editor; example prompts; Undo last AI change |
+| **Abuse reports** | Turnstile-protected; auto-suspend after 3 reports |
+| **Admin panel** | Pending approvals, Reports, All Artifacts, Users |
+
+## Generating KEY_ENCRYPTION_SECRET
+
+```bash
+openssl rand -base64 32
+```
+
+Copy the output into `.env`:
+
+```dotenv
+KEY_ENCRYPTION_SECRET=<paste here>
+```
+
+The value must decode to exactly 32 bytes. The server checks this at startup and exits with a clear error if it is wrong.
 
 ## How to make yourself admin
 
-Set `ADMIN_EMAIL` in `.env` to your email address before (or after) creating your account:
-
-```dotenv
-ADMIN_EMAIL=you@example.com
-```
-
-Then restart the server. The next time you log in with that email, your account is automatically promoted to admin. You can also set it while the server is running — the promotion happens on every login.
-
-The hardcoded bootstrap admin (`biswas` / `Biswas@2026`) is always seeded on first run as a fallback. Change the password after first login.
-
-## Cloudflare Turnstile setup
-
-Turnstile protects the "Report this page" form from bots. It is optional — without it, the form falls back to IP-rate-limiting (5 reports per IP per hour).
-
-1. Go to [dash.cloudflare.com](https://dash.cloudflare.com) → **Turnstile** → **Add widget**.
-2. Widget type: **Managed** (invisible for legitimate users).
-3. Add your domain (e.g. `biswa.io`) to the allowed list.
-4. Copy the **Site Key** into `TURNSTILE_SITE_KEY` and the **Secret Key** into `TURNSTILE_SECRET`.
-5. Restart the server.
-
-## First-publish approval
-
-Set `APPROVAL_MODE=manual` to hold every user's **first** publish for admin review:
-
-- The artifact is **not** served at its subdomain until approved (a "under review" page is shown).
-- It does **not** appear in the public gallery.
-- You will receive an email and see the artifact in **Admin → Pending approvals**.
-- After you approve, the user is marked **trusted** and all future publishes go live immediately.
-- `APPROVAL_MODE=auto` (the default) skips approval entirely.
+Set `ADMIN_EMAIL` in `.env` to your email address, then restart. The next login with that email is automatically promoted.
 
 ## Project Structure
 
 ```
 Biswa-Artifact/
-├── public/dist/     # Built React SPA (served by Express)
+├── public/dist/        # Built React SPA (served by Express)
 ├── server/
-│   ├── index.js     # Entry point — validates env, seeds DB, starts server
-│   ├── app.js       # Express app factory — routing order + /verify route
-│   ├── api.js       # REST API router (/api/*)
-│   ├── db.js        # PostgreSQL pool + idempotent schema migrations
-│   ├── sites.js     # Subdomain middleware — serves live copy only
-│   ├── config.js    # Centralised config from environment variables
-│   ├── mail.js      # Gmail SMTP via Nodemailer
-│   ├── names.js     # Subdomain validation + reserved list
-│   ├── profanity.js # Basic profanity blocklist
-│   └── templates.js # Default HTML/CSS/JS for new artifacts
-├── frontend/        # React + TanStack Router + Vite source
+│   ├── index.js        # Entry point — validates env, seeds DB, starts server
+│   ├── app.js          # Express app factory
+│   ├── api.js          # REST API router (/api/*)
+│   ├── db.js           # PostgreSQL pool + idempotent schema migrations
+│   ├── sites.js        # Subdomain middleware — serves live copy only
+│   ├── config.js       # Centralised config from environment variables
+│   ├── mail.js         # Gmail SMTP via Nodemailer
+│   ├── names.js        # Subdomain validation + reserved list
+│   ├── profanity.js    # Basic profanity blocklist
+│   ├── templates.js    # Default HTML/CSS/JS for new artifacts
+│   └── ai/
+│       ├── systemPrompt.js  # Internal AI system prompt (server-only)
+│       ├── encrypt.js       # AES-256-GCM key encryption helpers
+│       └── providers.js     # Gemini + OpenAI verification & generation
+├── frontend/           # React + TanStack Router + Vite source
 ├── deploy/
-│   ├── Caddyfile    # Reverse proxy + wildcard TLS config
-│   ├── setup.sh     # Server provisioning script
-│   └── r2-cors.json # Cloudflare R2 CORS policy
-├── .env.example     # Environment variable template
+│   ├── Caddyfile       # Reverse proxy + wildcard TLS config
+│   ├── setup.sh        # Server provisioning script
+│   └── r2-cors.json    # Cloudflare R2 CORS policy
+├── .env.example        # Environment variable template
 ├── Dockerfile
 └── docker-compose.yml
 ```
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for a deeper technical overview.
-
-## Deploy
-
-See `deploy/` for Caddyfile and server setup script.
-
-The app runs on port 3000. Put Caddy in front for TLS and wildcard subdomain routing.
-
-## Upgrading an existing deployment
-
-If you are updating from a version before the draft/live copy feature:
+## Upgrading an Existing Deployment
 
 ```bash
-# 1. Pull the latest code
+# 1. Pull latest code
 git pull
 
-# 2. Copy any new variables from .env.example into your live .env
-#    (ADMIN_EMAIL, APPROVAL_MODE, TURNSTILE_*, IP_SALT, quotas)
+# 2. Add new variables from .env.example to your live .env
+#    Required new variable:
+#      KEY_ENCRYPTION_SECRET=<openssl rand -base64 32>
+#    Optional new variables:
+#      MAX_IMAGE_STORAGE_MB=10
+#      MAX_FILE_STORAGE_MB=20
+#      AI_RATE_LIMIT=15
+#      AI_RATE_WINDOW_MIN=10
+#      AI_RATE_LIMIT_DAY=150
 nano .env
 
-# 3. Rebuild the frontend (if you changed any frontend files)
+# 3. Rebuild the frontend
 cd frontend && npm install && npm run build && cd ..
 
-# 4. Restart the server — db.js runs idempotent migrations automatically
+# 4. Restart — db.js runs idempotent migrations automatically
 sudo systemctl restart biswa-artifacts
 ```
 
-The migrations in `server/db.js init()` are fully idempotent (`ADD COLUMN IF NOT EXISTS`, `CREATE TABLE IF NOT EXISTS`). They will:
-- Add `email_verified`, `trusted`, `banned`, `is_admin` columns to `users`
-- Add `review_status`, `live_pages`, `live_css`, `live_js`, `draft_hash`, `live_hash`, `published_at` columns to `artifacts`
-- Create `email_tokens`, `artifact_versions`, `reports` tables
-- Backfill `live_pages/css/js` from current `pages/css/js` for all already-published artifacts
-- Set `review_status = 'approved'` for all existing published artifacts
+The migrations in `server/db.js init()` are fully idempotent. On upgrade they will:
+- Add `bytes` column to `images` (Part 1 — image byte quota)
+- Add `status` column to `files` (Part 1 — pending/ready flow)
+- Add `source`, `prompt`, `size_bytes`, `created_at` columns to `artifact_versions` (Part 3)
+- Create `user_ai_settings` table (Part 3 — BYOK encrypted keys)
+- Create `ai_messages` table (Part 3 — chat history)
+- All existing data is preserved
 
-No data is deleted.
+## Deploy
+
+See `deploy/` for Caddyfile and server setup script. The app runs on port 3000. Caddy handles TLS and wildcard subdomain routing.

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Link, useNavigate } from '@tanstack/react-router';
 import {
   AlertCircle, Check, CheckCircle2, Copy, ExternalLink, FileText,
@@ -44,6 +44,64 @@ async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
     ...opts,
   });
   return res.json() as Promise<T>;
+}
+
+/* ── Skeleton helpers ─────────────────────────────────────────────── */
+/* ── Gradient palette — deterministic per artifact name ────────── */
+const CARD_GRADIENTS = [
+  ['#7c3aed', '#6d28d9', '#4f46e5'],   // violet → indigo
+  ['#e11d48', '#db2777', '#a21caf'],   // rose → fuchsia
+  ['#f59e0b', '#f97316', '#e11d48'],   // amber → rose
+  ['#10b981', '#0d9488', '#0891b2'],   // emerald → cyan
+  ['#0ea5e9', '#2563eb', '#4f46e5'],   // sky → indigo
+  ['#84cc16', '#22c55e', '#10b981'],   // lime → emerald
+  ['#d946ef', '#ec4899', '#f43f5e'],   // fuchsia → rose
+  ['#06b6d4', '#0ea5e9', '#2563eb'],   // cyan → blue
+];
+
+function cardGradient(name: string): [string, string, string] {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
+  return CARD_GRADIENTS[hash % CARD_GRADIENTS.length] as [string, string, string];
+}
+
+/* ── Skeleton helpers ─────────────────────────────────────────── */
+function SkeletonCard() {
+  return (
+    <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
+      <div className="relative aspect-[16/7] overflow-hidden bg-secondary">
+        <div
+          className="absolute inset-0 -translate-x-full animate-[shimmer_1.6s_infinite]"
+          style={{ background: 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.06) 50%, transparent 100%)' }}
+        />
+      </div>
+      <div className="p-4">
+        <div className="flex items-center justify-between gap-2">
+          <div className="h-5 w-32 animate-pulse rounded-md bg-secondary" />
+          <div className="h-4 w-16 animate-pulse rounded-full bg-secondary" />
+        </div>
+        <div className="mt-1.5 h-3 w-24 animate-pulse rounded bg-secondary" />
+        <div className="mt-4 flex gap-2">
+          <div className="h-8 w-14 animate-pulse rounded-md bg-secondary" />
+          <div className="h-8 w-20 animate-pulse rounded-md bg-secondary" />
+          <div className="ml-auto h-8 w-8 animate-pulse rounded-md bg-secondary" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SkeletonAssetCard() {
+  return (
+    <div className="overflow-hidden rounded-xl border border-border bg-card shadow-sm animate-pulse">
+      <div className="aspect-[16/10] bg-secondary" />
+      <div className="p-4 space-y-2">
+        <div className="h-4 w-3/4 rounded bg-secondary" />
+        <div className="h-3 w-1/4 rounded bg-secondary" />
+        <div className="mt-3 h-8 w-full rounded-md bg-secondary" />
+      </div>
+    </div>
+  );
 }
 
 /* ── Copy helper with fallback ────────────────────────────────────────── */
@@ -100,6 +158,7 @@ export function Workspace({ view }: { view: WorkspaceView }) {
   const [quota, setQuota] = useState<QuotaInfo | null>(null);
   const [newDraft, setNewDraft] = useState(false);
   const [title, setTitle] = useState('');
+  const [dataLoading, setDataLoading] = useState(true);
 
   // Publish dialog state
   const [publishTarget, setPublishTarget] = useState<ArtifactItem | null>(null);
@@ -117,6 +176,9 @@ export function Workspace({ view }: { view: WorkspaceView }) {
   const [files, setFiles] = useState<FileItem[]>([]);
   const [images, setImages] = useState<ImageItem[]>([]);
   const fileInput = useRef<HTMLInputElement>(null);
+
+  // Upload progress state
+  const [uploadingFiles, setUploadingFiles] = useState<Map<string, number>>(new Map());
 
   const assetView = view === 'files' || view === 'images';
   const heading = STUDIO_TABS.find(t => t.to === `/${view}`)?.heading ?? 'My artifacts';
@@ -145,14 +207,22 @@ export function Workspace({ view }: { view: WorkspaceView }) {
   // Load data
   useEffect(() => {
     if (!user) return;
+    setDataLoading(true);
     if (view === 'files') {
-      apiFetch<{ items: FileItem[] }>('/api/files').then(d => setFiles(d.items)).catch(() => setNotice('Failed to load files'));
+      apiFetch<{ items: FileItem[] }>('/api/files')
+        .then(d => setFiles(d.items))
+        .catch(() => setNotice('Failed to load files'))
+        .finally(() => setDataLoading(false));
     } else if (view === 'images') {
-      apiFetch<{ items: ImageItem[] }>('/api/images').then(d => setImages(d.items)).catch(() => setNotice('Failed to load images'));
+      apiFetch<{ items: ImageItem[] }>('/api/images')
+        .then(d => setImages(d.items))
+        .catch(() => setNotice('Failed to load images'))
+        .finally(() => setDataLoading(false));
     } else {
       apiFetch<{ items: ArtifactItem[]; quota: QuotaInfo }>('/api/artifacts')
         .then(d => { setArtifacts(d.items); setQuota(d.quota); })
-        .catch(() => setNotice('Failed to load artifacts'));
+        .catch(() => setNotice('Failed to load artifacts'))
+        .finally(() => setDataLoading(false));
     }
   }, [view, user]);
 
@@ -244,14 +314,46 @@ export function Workspace({ view }: { view: WorkspaceView }) {
 
   const uploadFile = async (file: File) => {
     if (file.size > 200 * 1024 * 1024) { setNotice(`${file.name} exceeds 200 MB`); return; }
-    const presign = await apiFetch<{ id?: string; url?: string; error?: string }>('/api/files/presign', {
-      method: 'POST', body: JSON.stringify({ name: file.name, size: file.size, type: file.type }),
-    });
-    if (!presign.url) { setNotice(presign.error ?? 'Could not get upload URL'); return; }
-    await fetch(presign.url, { method: 'PUT', body: file, headers: { 'Content-Type': file.type } });
-    const data = await apiFetch<{ items: FileItem[] }>('/api/files');
-    setFiles(data.items);
-    setNotice(`${file.name} uploaded.`);
+    const uploadKey = `${file.name}-${Date.now()}`;
+    setUploadingFiles(prev => new Map(prev).set(uploadKey, 0));
+
+    try {
+      const presign = await apiFetch<{ id?: string; url?: string; error?: string }>('/api/files/presign', {
+        method: 'POST', body: JSON.stringify({ name: file.name, size: file.size, type: file.type }),
+      });
+      if (!presign.url) {
+        setNotice(presign.error ?? 'Could not get upload URL');
+        setUploadingFiles(prev => { const m = new Map(prev); m.delete(uploadKey); return m; });
+        return;
+      }
+
+      // Use XHR for progress tracking
+      await new Promise<void>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) {
+            const pct = Math.round((e.loaded / e.total) * 100);
+            setUploadingFiles(prev => new Map(prev).set(uploadKey, pct));
+          }
+        };
+        xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(`Upload failed: ${xhr.status}`)));
+        xhr.onerror = () => reject(new Error('Network error'));
+        xhr.open('PUT', presign.url!);
+        xhr.setRequestHeader('Content-Type', file.type);
+        xhr.send(file);
+      });
+
+      // Confirm upload succeeded so server marks it visible
+      await apiFetch(`/api/files/${presign.id}/confirm`, { method: 'POST' });
+
+      const data = await apiFetch<{ items: FileItem[] }>('/api/files');
+      setFiles(data.items);
+      setNotice(`${file.name} uploaded.`);
+    } catch (err) {
+      setNotice(`Upload failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setUploadingFiles(prev => { const m = new Map(prev); m.delete(uploadKey); return m; });
+    }
   };
 
   const deleteFile = async (id: string) => {
@@ -265,13 +367,39 @@ export function Workspace({ view }: { view: WorkspaceView }) {
   const uploadImage = async (file: File) => {
     if (!file.type.startsWith('image/')) { setNotice('Choose an image file.'); return; }
     if (file.size > 10 * 1024 * 1024) { setNotice(`${file.name} exceeds 10 MB`); return; }
-    const form = new FormData();
-    form.append('file', file);
-    const res = await fetch('/api/images', { method: 'POST', credentials: 'include', body: form });
-    const json = await res.json() as ImageItem & { error?: string };
-    if (!res.ok) { setNotice(json.error ?? 'Upload failed'); return; }
-    setImages(prev => [json, ...prev]);
-    setNotice(`${json.name} uploaded.`);
+    const uploadKey = `${file.name}-${Date.now()}`;
+    setUploadingFiles(prev => new Map(prev).set(uploadKey, 0));
+
+    try {
+      const form = new FormData();
+      form.append('file', file);
+
+      const json = await new Promise<ImageItem & { error?: string }>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) {
+            const pct = Math.round((e.loaded / e.total) * 100);
+            setUploadingFiles(prev => new Map(prev).set(uploadKey, pct));
+          }
+        };
+        xhr.onload = () => {
+          try { resolve(JSON.parse(xhr.responseText)); }
+          catch { reject(new Error('Invalid response')); }
+        };
+        xhr.onerror = () => reject(new Error('Network error'));
+        xhr.open('POST', '/api/images');
+        xhr.withCredentials = true;
+        xhr.send(form);
+      });
+
+      if (json.error) { setNotice(json.error); return; }
+      setImages(prev => [json, ...prev]);
+      setNotice(`${json.name} uploaded.`);
+    } catch (err) {
+      setNotice(`Upload failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setUploadingFiles(prev => { const m = new Map(prev); m.delete(uploadKey); return m; });
+    }
   };
 
   const deleteImage = async (id: string) => {
@@ -329,43 +457,48 @@ export function Workspace({ view }: { view: WorkspaceView }) {
       )}
 
       {/* Page header */}
-      <div className="flex flex-wrap items-end justify-between gap-5">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h1 className="font-display text-3xl font-semibold sm:text-4xl">{heading}</h1>
-          <p className="mt-2 text-sm text-muted-foreground">
+          <p className="mt-1.5 text-sm text-muted-foreground">
             {assetView ? 'Upload, copy the link, use it in any HTML.' : 'Draft, edit and publish.'}
           </p>
         </div>
-        <Button onClick={() => assetView ? fileInput.current?.click() : (setTitle(''), setNewDraft(true))}>
-          {assetView ? <Upload /> : <Plus />}
+        <Button className="w-full sm:w-auto" onClick={() => assetView ? fileInput.current?.click() : (setTitle(''), setNewDraft(true))}>
+          {assetView ? <Upload size={15} /> : <Plus size={15} />}
           {assetView ? `Upload ${view === 'images' ? 'image' : 'file'}` : 'New artifact'}
         </Button>
       </div>
 
-      {/* Quota meter (artifact views only) */}
+      {/* Quota meters (artifact views only) */}
       {!assetView && quota && (
-        <div className="mt-4 flex flex-wrap gap-6 text-xs text-muted-foreground">
-          <div className="flex items-center gap-2">
-            <Globe size={13} className="text-accent" />
-            <span>{quota.published} of {quota.maxPublished} published</span>
-            <div className="h-1.5 w-24 overflow-hidden rounded-full bg-secondary">
-              <div
-                className="h-full rounded-full bg-accent transition-all"
-                style={{ width: `${Math.min(100, (quota.published / quota.maxPublished) * 100)}%` }}
-              />
+        <div className="mt-4 flex flex-wrap gap-4 rounded-xl border border-border bg-card/60 px-4 py-3 text-xs text-muted-foreground">
+          <div className="flex items-center gap-2 min-w-0">
+            <Globe size={13} className="shrink-0 text-accent" />
+            <span className="shrink-0">{quota.published} / {quota.maxPublished} published</span>
+            <div className="h-1.5 w-20 shrink-0 overflow-hidden rounded-full bg-secondary">
+              <div className="h-full rounded-full bg-accent transition-all"
+                style={{ width: `${Math.min(100, (quota.published / quota.maxPublished) * 100)}%` }} />
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Layers size={13} className="text-muted-foreground" />
-            <span>{quota.total} of {quota.maxTotal} artifacts</span>
+            <Layers size={13} className="shrink-0 text-muted-foreground" />
+            <span>{quota.total} / {quota.maxTotal} artifacts</span>
           </div>
         </div>
       )}
 
       {/* Search */}
-      <label className="my-6 flex w-full items-center gap-2 rounded-md border border-input px-3 sm:w-64">
-        <Search size={16} className="text-muted-foreground" />
-        <input aria-label="Search" placeholder="Search…" value={search} onChange={e => setSearch(e.target.value)} className="min-w-0 flex-1 bg-transparent py-2 text-sm outline-none" />
+      <label className="my-5 flex w-full max-w-xs items-center gap-2 rounded-lg border border-input bg-background px-3">
+        <Search size={15} className="shrink-0 text-muted-foreground" />
+        <input aria-label="Search" placeholder="Search…" value={search}
+          onChange={e => setSearch(e.target.value)}
+          className="min-w-0 flex-1 bg-transparent py-2 text-sm outline-none" />
+        {search && (
+          <button onClick={() => setSearch('')} className="text-muted-foreground hover:text-foreground">
+            <X size={13} />
+          </button>
+        )}
       </label>
 
       {notice && <p role="status" className="mb-6 border-l-2 border-accent pl-3 text-sm">{notice}</p>}
@@ -382,8 +515,33 @@ export function Workspace({ view }: { view: WorkspaceView }) {
             Drop {view} here or click to upload {view === 'images' ? '· up to 10 MB' : '· up to 200 MB'}
           </button>
 
+          {/* Upload progress indicators */}
+          {uploadingFiles.size > 0 && (
+            <div className="mb-5 space-y-2">
+              {Array.from(uploadingFiles.entries()).map(([key, pct]) => {
+                const name = key.replace(/-\d+$/, '');
+                return (
+                  <div key={key} className="rounded-lg border border-border bg-card px-4 py-3">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-xs font-medium truncate max-w-[80%]">{name}</span>
+                      <span className="text-xs text-muted-foreground shrink-0">{pct}%</span>
+                    </div>
+                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-secondary">
+                      <div
+                        className="h-full rounded-full bg-accent transition-all duration-200"
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
           <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
-            {(view === 'images' ? visibleImages : visibleFiles).map(item => {
+            {dataLoading
+              ? Array.from({ length: 3 }).map((_, i) => <SkeletonAssetCard key={i} />)
+              : (view === 'images' ? visibleImages : visibleFiles).map(item => {
               const isImg = view === 'images';
               const url  = isImg ? (item as ImageItem).url : (item as FileItem).link;
               const name = isImg ? (item as ImageItem).name : (item as FileItem).name;
@@ -419,108 +577,162 @@ export function Workspace({ view }: { view: WorkspaceView }) {
               );
             })}
           </div>
-          {(view === 'images' ? visibleImages : visibleFiles).length === 0 &&
+          {!dataLoading && (view === 'images' ? visibleImages : visibleFiles).length === 0 &&
             <p className="py-12 text-center text-muted-foreground">Nothing uploaded yet.</p>}
         </div>
       ) : (
         /* ── Artifact grid ──────────────────────────────────────────── */
         <>
           <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
-            {visibleArtifacts.map(item => (
-              <article key={item.id} className="rounded-2xl border border-border bg-card p-4 shadow-sm transition hover:-translate-y-1 hover:shadow-md">
-                {/* Card thumbnail */}
-                <div className="relative flex aspect-[16/7] items-center justify-center overflow-hidden rounded-xl font-display text-4xl font-bold text-white"
-                  style={{ background: 'linear-gradient(135deg, oklch(0.55 0.22 278), oklch(0.72 0.16 300))' }}>
-                  {item.name.charAt(0).toUpperCase()}
-                  {item.locked && <Lock size={14} className="absolute right-3 top-3 text-white/80" />}
+            {dataLoading
+              ? Array.from({ length: 3 }).map((_, i) => <SkeletonCard key={i} />)
+              : visibleArtifacts.map(item => {
+                const [c1, c2, c3] = cardGradient(item.name);
+                const initial = item.name.charAt(0).toUpperCase();
+                return (
+              <article
+                key={item.id}
+                className="group flex flex-col overflow-hidden rounded-2xl border border-border/60 bg-card shadow-sm
+                           transition-all duration-300 ease-out
+                           hover:-translate-y-1.5 hover:shadow-[0_12px_40px_-8px_rgba(0,0,0,0.25)]
+                           hover:border-transparent"
+                style={{ '--card-c1': c1, '--card-c2': c2, '--card-c3': c3 } as React.CSSProperties}
+              >
+                {/* ── Gradient thumbnail ─────────────────────────── */}
+                <div
+                  className="relative flex aspect-[16/7] shrink-0 items-center justify-center overflow-hidden select-none"
+                  style={{ background: `linear-gradient(135deg, ${c1} 0%, ${c2} 55%, ${c3} 100%)` }}
+                >
+                  {/* animated noise/dot grid overlay */}
+                  <div className="absolute inset-0 opacity-20"
+                    style={{
+                      backgroundImage: 'radial-gradient(circle, rgba(255,255,255,0.3) 1px, transparent 1px)',
+                      backgroundSize: '20px 20px',
+                    }}
+                  />
+                  {/* shimmer sweep on hover */}
+                  <div
+                    className="absolute inset-0 -translate-x-full transition-transform duration-700 group-hover:translate-x-full"
+                    style={{ background: 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.15) 50%, transparent 100%)' }}
+                  />
+                  {/* Initial letter */}
+                  <span className="relative z-10 font-display text-5xl font-black tracking-tight text-white/90 drop-shadow-lg"
+                    style={{ textShadow: '0 2px 16px rgba(0,0,0,0.4)' }}>
+                    {initial}
+                  </span>
+                  {/* Decorative glow blobs */}
+                  <span className="absolute -bottom-4 -right-4 size-20 rounded-full opacity-30 blur-2xl"
+                    style={{ background: c3 }} />
+                  <span className="absolute -top-4 -left-4 size-16 rounded-full opacity-25 blur-xl"
+                    style={{ background: c1 }} />
 
-                  {/* Status overlay badges */}
+                  {/* Lock badge */}
+                  {item.locked && (
+                    <span className="absolute right-3 top-3 flex size-6 items-center justify-center rounded-full bg-black/40 backdrop-blur-sm">
+                      <Lock size={11} className="text-white/90" />
+                    </span>
+                  )}
+                  {/* Suspended overlay */}
                   {item.status === 'suspended' && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-black/60">
-                      <span className="rounded-full bg-destructive px-3 py-1 text-sm font-semibold text-white">Suspended</span>
+                    <div className="absolute inset-0 flex items-center justify-center bg-black/65 backdrop-blur-[1px]">
+                      <span className="rounded-full bg-destructive px-3 py-1 text-sm font-semibold text-white shadow">Suspended</span>
                     </div>
                   )}
+                  {/* Under review overlay */}
                   {item.review_status === 'pending' && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-black/60">
-                      <span className="flex items-center gap-1.5 rounded-full bg-amber-500 px-3 py-1 text-sm font-semibold text-black">
+                    <div className="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-[1px]">
+                      <span className="flex items-center gap-1.5 rounded-full bg-amber-500 px-3 py-1 text-sm font-semibold text-black shadow">
                         <Clock size={12} /> Under review
                       </span>
                     </div>
                   )}
                 </div>
 
-                {/* Title + status */}
-                <div className="mt-4 flex items-center justify-between gap-2">
-                  <h2 className="truncate font-display text-lg font-semibold">{item.name}</h2>
-                  <div className="flex shrink-0 items-center gap-1.5">
-                    {/* Unpublished changes badge */}
-                    {item.has_changes && item.status === 'published' && (
-                      <span className="flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
-                        <AlertCircle size={9} /> Unpublished changes
+                {/* ── Card content ────────────────────────────────── */}
+                <div className="flex flex-1 flex-col p-4">
+                  <div className="space-y-1.5">
+                    <h2 className="truncate font-display text-base font-semibold leading-snug" title={item.name}>
+                      {item.name}
+                    </h2>
+
+                    {/* Status badges */}
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                        item.status === 'published' ? 'bg-green-500/15 text-green-700 dark:text-green-400' :
+                        item.status === 'suspended' ? 'bg-destructive/20 text-destructive' :
+                        'bg-accent/15 text-accent'
+                      }`}>
+                        {item.review_status === 'pending' ? 'Under review' : item.status}
                       </span>
+                      {item.locked && (
+                        <span className="flex items-center gap-0.5 rounded-full bg-secondary px-2 py-0.5 text-[11px] text-muted-foreground">
+                          <Lock size={9} /> Locked
+                        </span>
+                      )}
+                      {item.has_changes && item.status === 'published' && (
+                        <span className="flex items-center gap-0.5 rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] text-amber-600 dark:text-amber-400">
+                          <AlertCircle size={9} /> Changes
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Subdomain link */}
+                    {item.subdomain && item.status === 'published' ? (
+                      <a href={`https://${item.subdomain}.biswa.io`} target="_blank" rel="noreferrer"
+                        className="flex items-center gap-1 font-mono text-[11px] text-accent hover:underline truncate">
+                        <Globe size={10} className="shrink-0" />{item.subdomain}.biswa.io
+                      </a>
+                    ) : item.review_status === 'pending' && item.subdomain ? (
+                      <p className="flex items-center gap-1 font-mono text-[11px] text-amber-500 truncate">
+                        <Clock size={10} className="shrink-0" />{item.subdomain}.biswa.io
+                      </p>
+                    ) : (
+                      <p className="font-mono text-[11px] text-muted-foreground/50">not published</p>
                     )}
-                    <span className={`rounded-full px-2.5 py-0.5 text-xs ${
-                      item.status === 'published' ? 'bg-shape-mint/20 text-foreground' :
-                      item.status === 'suspended' ? 'bg-destructive/20 text-destructive' :
-                      'bg-accent/15 text-accent'
-                    }`}>{item.status}</span>
                   </div>
-                </div>
 
-                {/* Subdomain */}
-                {item.subdomain && item.status === 'published' ? (
-                  <a href={`https://${item.subdomain}.biswa.io`} target="_blank" rel="noreferrer"
-                    className="mt-1 flex items-center gap-1 font-mono text-xs text-accent hover:underline">
-                    <Globe size={11} />{item.subdomain}.biswa.io
-                  </a>
-                ) : item.subdomain && item.review_status === 'pending' ? (
-                  <p className="mt-1 flex items-center gap-1 font-mono text-xs text-amber-500">
-                    <Clock size={10} />{item.subdomain}.biswa.io — pending review
-                  </p>
-                ) : (
-                  <p className="mt-1 font-mono text-xs text-muted-foreground">not published</p>
-                )}
-
-                {/* Actions */}
-                <div className="mt-4 flex flex-wrap gap-2">
-                  <Button variant="outline" size="sm"
-                    onClick={() => void navigate({ to: '/editor/$slug', params: { slug: item.id } })}>
-                    Edit
-                  </Button>
+                  {/* ── Actions row ─────────────────────────────── */}
+                  <div className="mt-auto flex items-center gap-1.5 border-t border-border pt-3">
+                    <Button variant="outline" size="sm" className="h-8 text-xs"
+                      onClick={() => void navigate({ to: '/editor/$slug', params: { slug: item.id } })}>
+                      Edit
+                    </Button>
                   {item.status === 'published' ? (
                     <>
-                      {/* Publish update (only shown when there are changes) */}
                       {item.has_changes && (
-                        <Button size="sm" onClick={() => openPublish(item)}
-                          className="bg-amber-500 text-black hover:bg-amber-400">
-                          <RefreshCw size={13} /> Publish update
+                        <Button size="sm" className="h-8 bg-amber-500 text-xs text-black hover:bg-amber-400"
+                          onClick={() => openPublish(item)}>
+                          <RefreshCw size={12} /> Update
                         </Button>
                       )}
-                      <Button variant="outline" size="sm" onClick={() => void doUnpublish(item.id)}>
+                      <Button variant="outline" size="sm" className="h-8 text-xs"
+                        onClick={() => void doUnpublish(item.id)}>
                         Unpublish
                       </Button>
                     </>
                   ) : item.review_status === 'pending' ? (
-                    <Button size="sm" variant="outline" disabled>
-                      <Clock size={13} /> Under review
+                    <Button size="sm" variant="outline" className="h-8 text-xs" disabled>
+                      <Clock size={12} /> Pending
                     </Button>
                   ) : (
-                    <Button size="sm" onClick={() => openPublish(item)}
-                      disabled={!user.email_verified}>
-                      <Globe size={14} /> Publish
+                    <Button size="sm" className="h-8 text-xs"
+                      onClick={() => openPublish(item)} disabled={!user.email_verified}>
+                      <Globe size={12} /> Publish
                     </Button>
                   )}
-                  <Button variant="outline" size="sm"
-                    onClick={() => void deleteArtifact(item.id, item.name)}
-                    className="ml-auto text-destructive hover:bg-destructive/10">
+                  <Button variant="ghost" size="icon" aria-label={`Delete ${item.name}`}
+                    className="ml-auto h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                    onClick={() => void deleteArtifact(item.id, item.name)}>
                     <Trash2 size={14} />
                   </Button>
                 </div>
+                </div>
               </article>
-            ))}
+                );
+              })}
           </div>
 
-          {visibleArtifacts.length === 0 && (
+          {!dataLoading && visibleArtifacts.length === 0 && (
             <div className="py-20 text-center">
               <Layers className="mx-auto mb-4 size-8 text-muted-foreground" />
               <h2 className="font-display text-xl">Nothing here yet.</h2>

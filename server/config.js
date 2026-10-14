@@ -26,6 +26,20 @@ const MAX_STORAGE_PER_USER_MB  = Number(E.MAX_STORAGE_PER_USER_MB)  || 100;
 const MAX_IMAGES_PER_USER      = Number(E.MAX_IMAGES_PER_USER)      || 50;
 const MAX_IMAGE_BYTES          = Number(E.MAX_IMAGE_BYTES)          || 10 * 1024 * 1024;
 
+// ── New: per-user storage quotas (separate for images and files) ────────────
+// MAX_IMAGE_STORAGE_MB: total Cloudinary image storage per user in MB
+const MAX_IMAGE_STORAGE_MB     = Number(E.MAX_IMAGE_STORAGE_MB)     || 10;
+// MAX_FILE_STORAGE_MB: total R2 file storage per user in MB
+const MAX_FILE_STORAGE_MB      = Number(E.MAX_FILE_STORAGE_MB)      || 20;
+
+// ── AI rate limit defaults ──────────────────────────────────────────────────
+// AI_RATE_WINDOW_MIN: rolling window in minutes for per-user AI rate limit
+const AI_RATE_WINDOW_MIN       = Number(E.AI_RATE_WINDOW_MIN)       || 10;
+// AI_RATE_LIMIT: max AI generation requests per user per window
+const AI_RATE_LIMIT            = Number(E.AI_RATE_LIMIT)            || 15;
+// AI_RATE_LIMIT_DAY: max AI generation requests per user per day
+const AI_RATE_LIMIT_DAY        = Number(E.AI_RATE_LIMIT_DAY)        || 150;
+
 module.exports = {
   /** Raw environment variables (use sparingly — prefer named exports below). */
   E,
@@ -92,14 +106,37 @@ module.exports = {
   /** Max total bytes for a single artifact (sum of all pages + css + js). */
   MAX_ARTIFACT_BYTES,
 
-  /** Max R2 storage per user in megabytes. */
+  /** Max R2 storage per user in megabytes (legacy — alias for MAX_FILE_STORAGE_MB). */
   MAX_STORAGE_PER_USER_MB,
 
-  /** Max images per user (Cloudinary). */
+  /** Max images per user (Cloudinary count limit). */
   MAX_IMAGES_PER_USER,
 
-  /** Max single image size in bytes. */
+  /** Max single image upload size in bytes. */
   MAX_IMAGE_BYTES,
+
+  /** Max total Cloudinary image storage per user in megabytes. */
+  MAX_IMAGE_STORAGE_MB,
+
+  /** Max total Cloudflare R2 file storage per user in megabytes. */
+  MAX_FILE_STORAGE_MB,
+
+  // ── AI settings ───────────────────────────────────────────────────────────
+
+  /**
+   * 32-byte (base64-encoded) master key for AES-256-GCM encryption of BYOK API keys.
+   * Must be set in production. Generate with: openssl rand -base64 32
+   */
+  KEY_ENCRYPTION_SECRET: E.KEY_ENCRYPTION_SECRET || '',
+
+  /** Rolling window in minutes for per-user AI generation rate limiting. */
+  AI_RATE_WINDOW_MIN,
+
+  /** Max AI generation requests per user per rolling window. */
+  AI_RATE_LIMIT,
+
+  /** Max AI generation requests per user per calendar day. */
+  AI_RATE_LIMIT_DAY,
 
   // ── IP hashing secret ─────────────────────────────────────────────────────
 

@@ -79,12 +79,16 @@ app.use('/api', express.json({ limit: '2mb' }), api);
 // ── Static assets (React SPA build) ─────────────────────────────────────────
 app.use(express.static(DIST_DIR, {
   index: false,
-  maxAge: '1y',
-  immutable: true,
+  maxAge: '1d',
+  immutable: false,
   etag: true,
+  lastModified: true,
   setHeaders(res, filePath) {
     if (filePath.endsWith('.html')) {
       res.setHeader('Cache-Control', 'no-cache');
+    } else if (filePath.endsWith('.js') || filePath.endsWith('.css')) {
+      // Revalidate every visit — ETag ensures no re-download if unchanged
+      res.setHeader('Cache-Control', 'public, max-age=86400, must-revalidate');
     }
   },
 }));
