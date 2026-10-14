@@ -914,7 +914,7 @@ router.get('/ai/settings', requireDB, requireAuth, wrap(async (req, res) => {
 router.post('/ai/verify', requireDB, requireAuth, aiVerifyLimiter, wrap(async (req, res) => {
   const { provider, apiKey } = req.body || {};
   if (!provider || !apiKey) return badRequest(res, 'provider and apiKey are required');
-  if (!['gemini', 'openai'].includes(provider)) return badRequest(res, 'provider must be "gemini" or "openai"');
+  if (!['gemini', 'openai', 'groq'].includes(provider)) return badRequest(res, 'provider must be "gemini", "openai", or "groq"');
 
   const key = String(apiKey).trim();
   if (key.length < 10) return badRequest(res, 'API key looks too short');
@@ -932,7 +932,7 @@ router.post('/ai/verify', requireDB, requireAuth, aiVerifyLimiter, wrap(async (r
 router.put('/ai/settings', requireDB, requireAuth, aiVerifyLimiter, wrap(async (req, res) => {
   const { provider, apiKey, model } = req.body || {};
   if (!provider || !apiKey || !model) return badRequest(res, 'provider, apiKey and model are required');
-  if (!['gemini', 'openai'].includes(provider)) return badRequest(res, 'provider must be "gemini" or "openai"');
+  if (!['gemini', 'openai', 'groq'].includes(provider)) return badRequest(res, 'provider must be "gemini", "openai", or "groq"');
 
   const key = String(apiKey).trim();
   if (key.length < 10) return badRequest(res, 'API key looks too short');
